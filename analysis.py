@@ -2,7 +2,7 @@
 FGA vs immune gene expression in TCGA-PAAD (cBioPortal paad_tcga_pan_can_atlas_2018).
 
 Usage:
-  python analysis.py --clinical clinical.tsv --expr expression.txt [--purity purity.csv --purity-col CPE]
+  python analysis.py --clinical clinical.tsv --expr expression.txt [--purity abs.txt --purity-id-col sample --purity-col purity] [--leuk leuk.tsv]
 
 Purity file: any CSV/TSV with a TCGA sample barcode column (default 'Sample ID')
 and a purity column (e.g. 'CPE' from Aran et al. 2015, Supp Table). Merged on the
@@ -74,6 +74,8 @@ def main():
     ap.add_argument("--purity")
     ap.add_argument("--purity-col", default="CPE")
     ap.add_argument("--purity-id-col", default="Sample ID")
+    ap.add_argument("--leuk", help="TCGA_all_leuk_estimate.masked.20170107.tsv (no header: cancer, barcode, fraction)")
+    ap.add_argument("--leuk-cancer", default="PAAD")
     ap.add_argument("--out", default="results")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -101,6 +103,24 @@ def main():
         print(f"purity available for {df['purity'].notna().sum()} / {len(df)}")
     else:
         print("No purity file given: skipping purity-adjusted analyses.")
+
+    if a.leuk:
+        lf = pd.read_csv(a.leuk, sep="\t", header=None, names=["cancer", "barcode", "LF"])
+        lf = lf[lf.cancer == a.leuk_cancer].copy()
+        lf["key"] = lf["barcode"].str[:15]
+        if "key" not in df: df["key"] = df["sample"].str[:15]
+        df = df.merge(lf.drop_duplicates("key")[["key", "LF"]], on="key", how="left")
+        print(f"leukocyte fraction available for {df['LF'].notna().sum()} / {len(df)}")
+        lrows = []
+        for lab, sub in [("all", df), ("PDAC-annotated", df[df.annotated]),
+                         ("FGA>0.02", df[df.FGA > 0.02]),
+                         ("annotated & FGA>0.02", df[df.annotated & (df.FGA > 0.02)])]:
+            d = sub[["FGA", "LF"]].dropna()
+            r, p = stats.spearmanr(d.FGA, d.LF)
+            lrows.append(dict(set=lab, rho=r, p=p, n=len(d)))
+        lt = pd.DataFrame(lrows)
+        lt.to_csv(f"{a.out}/fga_vs_leukocyte_fraction.csv", index=False)
+        print("FGA vs leukocyte fraction:\n", lt.round(3).to_string(index=False))
 
     res = []
     # published analyses
